@@ -4,79 +4,99 @@ import re
 import json
 
 class communicate:
+
     cmd_list = []
 
     def __init__(self, port):
         self._port = port
 
     def _setcmd(self, cmd, end='\r\n'):
-        end = '\r\n'
+        return cmd + end
 
-        return (cmd + end)
-    def _readtill(self,till="OK"):
-        rcv = self._port.read(14816)
-        rcvd = rcv.decode()
-        while "OK" not in rcvd: 
-            rcvd += rcv.decode()
-            rcv = self._port.read(14816)
-        return rcvd
-    def _ATcmd(self):
-        self._port.write(self._setcmd("AT").encode())
-        rcv = self._port.read(14816)
+    def _readtill(self, till="OK", timeout=5.0):
+        buf = b""
+        start = time.time()
+        while True:
+            chunk = self._port.read(1)
+            if chunk:
+                buf += chunk
+                try:
+                    text = buf.decode(errors="ignore")
+                except Exception:
+                    text = ""
+                if till in text or "ERROR" in text:
+                    return buf
+            else:
+                if time.time() - start > timeout:
+                    return buf
 
-    def _send_cmd(self, cmd, t=1, bytes=14816, return_data=False, 
-                printio=False, get_decode_data=False,read=True):
-        cmd = self._setcmd(cmd)
-        self._port.write(cmd.encode())
+    def _send_cmd(
+        self,
+        cmd,
+        t=0.1,
+        bytes=14816,
+        return_data=False,
+        printio=False,
+        get_decode_data=False,
+        read=True,
+    ):
+        out = self._setcmd(cmd)
+        if printio:
+            print(">>", out.strip())
+        self._port.write(out.encode("ascii", errors="ignore"))
+
+        data = None
+
         if read:
+            if t:
+                time.sleep(t)
+
+            if get_decode_data:
+                data = None
+            else:
+                data = self._port.read(bytes)
+                if printio and data:
+                    try:
+                        print("<<", data.decode(errors="ignore"))
+                    except Exception:
+                        print("<<", data)
+
+        if return_data:
+            return data
+
+    def _read_sent_data(self, size, t=0.1):
+        if t:
             time.sleep(t)
-            if not get_decode_data:
-                rcv = self._port.read(bytes)
-            else:
-                rcv = None
+        return self._port.read(size)
 
-            if printio:
-                print(rcv.decode())
-            
-            if return_data:
-                return rcv
+    def _getdata(
+        self,
+        data_to_decode=None,
+        string_to_decode=None,
+        till=b"\n",
+        count=2,
+        counter=0,
+        timeout=5.0,
+    ):
+        if data_to_decode is None:
+            data_to_decode = []
 
-    def _read_sent_data(self, numberOfBytes):
-        rcv = self._port.read(numberOfBytes)
+        occurrences = counter
+        start = time.time()
 
-        return rcv
+        while True:
+            rcv = self._port.read(1)
+            if not rcv:
+                if time.time() - start > timeout:
+                    break
+                else:
+                    continue
 
-    def _bearer(self,APN):
-        self._ATcmd()
-        cmd = "AT +SAPBR=0,1"
-        self._send_cmd(cmd)
-        self._ATcmd()
-        cmd = 'AT + SAPBR=3,1,"CONTYPE","GPRS"'
-        self._send_cmd(cmd)
-        cmd = 'AT + SAPBR=3,1,"APN","{}"'.format(APN)
-        self._send_cmd(cmd)
-        cmd = "AT + SAPBR=1,1"
-        self._send_cmd(cmd)
-        cmd = "AT + SAPBR=2,1"
-        data = self._send_cmd(cmd,return_data=True)
-        try :
-           IP = data.decode().split()[4].split(",")[-1].replace('"','')
-        except:
-            IP = None
-        return IP
-
-    def _getdata(self, data_to_decode=[], string_to_decode=None, till=b'\n', count=2, counter=0):
-
-        rcv = self._port.read(1)
-
-        if rcv == till:
-            counter += 1
-            if counter == count:
-                data_to_decode.append(rcv)
-                return b"".join(data_to_decode)
-            else:
-                data_to_decode.append(rcv)
-                return self._getdata(data_to_decode, string_to_decode, till, count, counter)
-        else:
             data_to_decode.append(rcv)
-            return self._getdata(data_to_decode, string_to_decode, till, count, counter)
+
+            if rcv == till:
+                occurrences += 1
+                if occurrences >= count:
+                    break
+
+        return b"".join(data_to_decode)
